@@ -1,13 +1,22 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:fimber/fimber.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_ble_lib_example/device_details/device_details_bloc.dart';
+import 'package:flutter_ble_lib_example/device_details/view/logs_container_view.dart';
 
 import 'package:flutter_ble_lib_example/model/ble_device.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_ble_lib/flutter_ble_lib.dart';
+import 'package:flutter_ble_lib_example/test_scenarios/test_scenarios.dart';
+import 'package:rxdart/rxdart.dart';
 
+import '../sensor_tag_config.dart';
 import 'devices_bloc.dart';
 import 'devices_bloc_provider.dart';
 import 'hex_painter.dart';
+import 'package:location/location.dart';
 
 typedef DeviceTapListener = void Function();
 
@@ -20,6 +29,30 @@ class DeviceListScreenState extends State<DevicesListScreen> {
   DevicesBloc _devicesBloc;
   StreamSubscription _appStateSubscription;
   bool _shouldRunOnResume = true;
+  BleManager bleManager = BleManager();
+  bool deviceConnectionAttempted = false;
+
+  BehaviorSubject<BleDevice> _deviceController;
+
+  ValueObservable<BleDevice> get device => _deviceController.stream;
+
+  BehaviorSubject<PeripheralConnectionState> _connectionStateController = BehaviorSubject<PeripheralConnectionState>.seeded(PeripheralConnectionState.disconnected);
+
+  Location location = new Location();
+
+  bool _serviceEnabled;
+  PermissionStatus _permissionGranted;
+  LocationData _locationData;
+
+  Subject<List<DebugLog>> _logsController;
+
+  Observable<List<DebugLog>> get logs => _logsController.stream;
+
+  List<DebugLog> _logs = [];
+  Logger log;
+  Logger logError;
+
+  BleManager _bleManager = BleManager();
 
   @override
   void didUpdateWidget(DevicesListScreen oldWidget) {
@@ -33,17 +66,96 @@ class DeviceListScreenState extends State<DevicesListScreen> {
     _devicesBloc.dispose();
   }
 
-  void _onResume() {
-    Fimber.d("onResume");
-    _devicesBloc.init();
+  Future<void> _onResume() async {
+    log("onResume");
+
+    _serviceEnabled = await location.serviceEnabled();
+    if (!_serviceEnabled) {
+      _serviceEnabled = await location.requestService();
+      if (!_serviceEnabled) {
+        return;
+      }
+    }
+
+    _permissionGranted = await location.hasPermission();
+    if (_permissionGranted == PermissionStatus.denied) {
+      _permissionGranted = await location.requestPermission();
+      if (_permissionGranted != PermissionStatus.granted) {
+        return;
+      }
+    }
+    log("Getting Current Location Data");
+
+    _locationData = await location.getLocation();
+
+    // log("Getting Current Location Data - Done");
+
+    // location.onLocationChanged.listen((LocationData currentLocation) {
+    //   log("Getting Continuous Location Data: \n$currentLocation.");
+    // });    
+
+
+    
+    
+    
     _appStateSubscription = _devicesBloc.pickedDevice.listen((bleDevice) async {
-      Fimber.d("navigate to details");
-      _onPause();
-      await Navigator.pushNamed(context, "/details");
-      setState(() {
-        _shouldRunOnResume = true;
+      log("navigating to selected device");
+      //_onPause();
+
+      _deviceController = BehaviorSubject<BleDevice>.seeded(bleDevice);
+
+      _deviceController.stream.listen((bleDevice) async {
+        var peripheral = bleDevice.peripheral;
+
+        peripheral.observeConnectionState(emitCurrentValue: true, completeOnDisconnect: true).listen((connectionState) async {
+          log('Observed new connection state: \n$connectionState');
+          _connectionStateController.add(connectionState);
+        });
+
+        try {
+          if (await peripheral.isConnected()) {
+            log("Already Connected to ${peripheral.name}");
+          } else {
+            log("Connecting to ${peripheral.name}");
+            await peripheral.connect();
+            log("Connected!");
+
+            await peripheral.discoverAllServicesAndCharacteristics().then((_) => peripheral.services()).then((services) {
+              log("PRINTING SERVICES for ${peripheral.name}");
+              var srv = services.firstWhere((service) => service.uuid == SensorTagTemperatureUuids.temperatureService.toLowerCase());
+              return srv;
+            }).then((service) async {
+              service.monitorCharacteristic(SensorTagTemperatureUuids.temperatureDataCharacteristic, transactionId: "ignitionOn").listen((event) {
+                if (event.value.toString().contains("[0]")) {
+                  log("Ignition Off");
+                } else if (event.value.toString().contains("[1]")) {
+                  log("Ignition On");
+                } else {
+                  log("Ignition - No Event Recorded");
+                }
+              });
+            });
+          }
+
+          //await service.writeCharacteristic(SensorTagTemperatureUuids.temperatureConfigCharacteristic, Uint8List.fromList([valueToSave]), false);
+
+          //Fimber.d("Written \"$valueToSave\" to temperature config");
+        } on BleError catch (e) {
+          (e.toString());
+
+          if (await _deviceController.stream.value.peripheral.isConnected()) {
+            log("DISCONNECTING...");
+            await _deviceController.stream.value.peripheral.disconnectOrCancelConnection();
+          }
+          log("Disconnected!");
+        }
       });
-      Fimber.d("back from details");
+
+      //await Navigator.pushNamed(context, "/details");
+      //setState(() {
+      //  _shouldRunOnResume = true;
+      // });
+      //  Fimber.d("back from details");
     });
   }
 
@@ -61,23 +173,60 @@ class DeviceListScreenState extends State<DevicesListScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+
+    _logsController = PublishSubject<List<DebugLog>>();
+
+    log = (text) {
+      var now = DateTime.now();
+      _logs.insert(
+          0,
+          DebugLog(
+            '${now.hour}:${now.minute}:${now.second}.${now.millisecond}',
+            text,
+          ));
+      Fimber.d(text);
+      _logsController.add(_logs);
+    };
+
+    logError = (text) {
+      _logs.insert(0, DebugLog(DateTime.now().toString(), "ERROR: $text"));
+      Fimber.e(text);
+      _logsController.add(_logs);
+    };
+  }
+
+  @override
   Widget build(BuildContext context) {
     Fimber.d("build DeviceListScreenState");
     if (_shouldRunOnResume) {
       _shouldRunOnResume = false;
       _onResume();
     }
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Bluetooth devices'),
       ),
-      body: StreamBuilder<List<BleDevice>>(
-        initialData: _devicesBloc.visibleDevices.value,
-        stream: _devicesBloc.visibleDevices,
-        builder: (context, snapshot) => RefreshIndicator(
-          onRefresh: _devicesBloc.refresh,
-          child: DevicesList(_devicesBloc, snapshot.data),
-        ),
+      body: Column(
+        children: [
+          Expanded(
+            flex: 3,
+            child: StreamBuilder<List<BleDevice>>(
+              initialData: _devicesBloc.visibleDevices.value,
+              stream: _devicesBloc.visibleDevices,
+              builder: (context, snapshot) => RefreshIndicator(
+                onRefresh: _devicesBloc.refresh,
+                child: DevicesList(_devicesBloc, snapshot.data),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 7,
+            child: LogsContainerView(logs),
+          )
+        ],
       ),
     );
   }
@@ -86,6 +235,7 @@ class DeviceListScreenState extends State<DevicesListScreen> {
   void dispose() {
     Fimber.d("Dispose DeviceListScreenState");
     _onPause();
+
     super.dispose();
   }
 
@@ -113,12 +263,10 @@ class DevicesList extends ListView {
             itemCount: devices.length,
             itemBuilder: (context, i) {
               Fimber.d("Build row for $i");
-              return _buildRow(context, devices[i],
-                  _createTapListener(devicesBloc, devices[i]));
+              return _buildRow(context, devices[i], _createTapListener(devicesBloc, devices[i]));
             });
 
-  static DeviceTapListener _createTapListener(
-      DevicesBloc devicesBloc, BleDevice bleDevice) {
+  static DeviceTapListener _createTapListener(DevicesBloc devicesBloc, BleDevice bleDevice) {
     return () {
       Fimber.d("clicked device: ${bleDevice.name}");
       devicesBloc.devicePicker.add(bleDevice);
@@ -135,20 +283,14 @@ class DevicesList extends ListView {
             ),
             backgroundColor: Theme.of(context).accentColor);
       case DeviceCategory.hex:
-        return CircleAvatar(
-            child: CustomPaint(painter: HexPainter(), size: Size(20, 24)),
-            backgroundColor: Colors.black);
+        return CircleAvatar(child: CustomPaint(painter: HexPainter(), size: Size(20, 24)), backgroundColor: Colors.black);
       case DeviceCategory.other:
       default:
-        return CircleAvatar(
-            child: Icon(Icons.bluetooth),
-            backgroundColor: Theme.of(context).primaryColor,
-            foregroundColor: Colors.white);
+        return CircleAvatar(child: Icon(Icons.bluetooth), backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white);
     }
   }
 
-  static Widget _buildRow(BuildContext context, BleDevice device,
-      DeviceTapListener deviceTapListener) {
+  static Widget _buildRow(BuildContext context, BleDevice device, DeviceTapListener deviceTapListener) {
     return ListTile(
       leading: Padding(
         padding: const EdgeInsets.only(top: 8),

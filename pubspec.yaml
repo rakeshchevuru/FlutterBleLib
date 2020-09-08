@@ -13,11 +13,12 @@ dependencies:
   async: ^2.2.0
   flutter:
     sdk: flutter
+  location: ^3.0.0
 
 dev_dependencies:
   test: ^1.5.3
   mockito: ^4.0.0
-  pedantic: ^1.9.0
+
 
   flutter_test:
     sdk: flutter

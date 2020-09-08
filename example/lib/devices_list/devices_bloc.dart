@@ -11,17 +11,14 @@ import 'package:rxdart/rxdart.dart';
 class DevicesBloc {
   final List<BleDevice> bleDevices = <BleDevice>[];
 
-  BehaviorSubject<List<BleDevice>> _visibleDevicesController =
-      BehaviorSubject<List<BleDevice>>.seeded(<BleDevice>[]);
+  BehaviorSubject<List<BleDevice>> _visibleDevicesController = BehaviorSubject<List<BleDevice>>.seeded(<BleDevice>[]);
 
-  StreamController<BleDevice> _devicePickerController =
-      StreamController<BleDevice>();
+  StreamController<BleDevice> _devicePickerController = StreamController<BleDevice>();
 
   StreamSubscription<ScanResult> _scanSubscription;
   StreamSubscription _devicePickerSubscription;
 
-  ValueObservable<List<BleDevice>> get visibleDevices =>
-      _visibleDevicesController.stream;
+  ValueObservable<List<BleDevice>> get visibleDevices => _visibleDevicesController.stream;
 
   Sink<BleDevice> get devicePicker => _devicePickerController.sink;
 
@@ -29,8 +26,7 @@ class DevicesBloc {
   BleManager _bleManager;
   PermissionStatus _locationPermissionStatus = PermissionStatus.unknown;
 
-  Stream<BleDevice> get pickedDevice => _deviceRepository.pickedDevice
-      .skipWhile((bleDevice) => bleDevice == null);
+  Stream<BleDevice> get pickedDevice => _deviceRepository.pickedDevice.skipWhile((bleDevice) => bleDevice == null);
 
   DevicesBloc(this._deviceRepository, this._bleManager);
 
@@ -64,8 +60,7 @@ class DevicesBloc {
         .then((_) => _startScan());
 
     if (_visibleDevicesController.isClosed) {
-      _visibleDevicesController =
-          BehaviorSubject<List<BleDevice>>.seeded(<BleDevice>[]);
+      _visibleDevicesController = BehaviorSubject<List<BleDevice>>.seeded(<BleDevice>[]);
     }
 
     if (_devicePickerController.isClosed) {
@@ -73,14 +68,12 @@ class DevicesBloc {
     }
 
     Fimber.d(" listen to _devicePickerController.stream");
-    _devicePickerSubscription =
-        _devicePickerController.stream.listen(_handlePickedDevice);
+    _devicePickerSubscription = _devicePickerController.stream.listen(_handlePickedDevice);
   }
 
   Future<void> _checkPermissions() async {
     if (Platform.isAndroid) {
-      var permissionStatus = await PermissionHandler()
-          .requestPermissions([PermissionGroup.location]);
+      var permissionStatus = await PermissionHandler().requestPermissions([PermissionGroup.location]);
 
       _locationPermissionStatus = permissionStatus[PermissionGroup.location];
 
@@ -93,27 +86,28 @@ class DevicesBloc {
   Future<void> _waitForBluetoothPoweredOn() async {
     Completer completer = Completer();
     StreamSubscription<BluetoothState> subscription;
-    subscription = _bleManager
-        .observeBluetoothState(emitCurrentValue: true)
-        .listen((bluetoothState) async {
-      if (bluetoothState == BluetoothState.POWERED_ON &&
-          !completer.isCompleted) {
-        await subscription.cancel();
+    subscription = _bleManager.observeBluetoothState(emitCurrentValue: true).listen((bluetoothState) async {
+      if (bluetoothState == BluetoothState.POWERED_ON && !completer.isCompleted) {
+        //await subscription.cancel();
+        bleDevices.clear();
         completer.complete();
+      } else if (bluetoothState == BluetoothState.POWERED_OFF) {
+        bleDevices.clear();
+        completer = Completer();
       }
     });
+
+    var tmp = completer.future;
+
     return completer.future;
   }
 
   void _startScan() {
     Fimber.d("Ble client created");
-    _scanSubscription =
-        _bleManager.startPeripheralScan().listen((ScanResult scanResult) {
+    _scanSubscription = _bleManager.startPeripheralScan().listen((ScanResult scanResult) {
       var bleDevice = BleDevice(scanResult);
-      if (scanResult.advertisementData.localName != null &&
-          !bleDevices.contains(bleDevice)) {
-        Fimber.d(
-            'found new device ${scanResult.advertisementData.localName} ${scanResult.peripheral.identifier}');
+      if (scanResult.advertisementData.localName != null && !bleDevices.contains(bleDevice)) {
+        Fimber.d('found new device ${scanResult.advertisementData.localName} ${scanResult.peripheral.identifier}');
         bleDevices.add(bleDevice);
         _visibleDevicesController.add(bleDevices.sublist(0));
       }
@@ -125,8 +119,6 @@ class DevicesBloc {
     await _bleManager.stopPeripheralScan();
     bleDevices.clear();
     _visibleDevicesController.add(bleDevices.sublist(0));
-    await _checkPermissions()
-        .then((_) => _startScan())
-        .catchError((e) => Fimber.d("Couldn't refresh", ex: e));
+    await _checkPermissions().then((_) => _startScan()).catchError((e) => Fimber.d("Couldn't refresh", ex: e));
   }
 }
