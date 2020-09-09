@@ -8,6 +8,8 @@ import 'package:flutter_ble_lib/flutter_ble_lib.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
 
+import '../sensor_tag_config.dart';
+
 class DevicesBloc {
   final List<BleDevice> bleDevices = <BleDevice>[];
 
@@ -42,7 +44,11 @@ class DevicesBloc {
     _scanSubscription?.cancel();
   }
 
-  void init() {
+  void dispose2() {
+    _scanSubscription?.cancel();
+  }
+
+  void init(log, BehaviorSubject<BleDevice> deviceController, BehaviorSubject<PeripheralConnectionState> connectionStateController) {
     Fimber.d("Init devices bloc");
     bleDevices.clear();
     _bleManager
@@ -56,8 +62,8 @@ class DevicesBloc {
         .catchError((e) => Fimber.d("Couldn't create BLE client", ex: e))
         .then((_) => _checkPermissions())
         .catchError((e) => Fimber.d("Permission check error", ex: e))
-        .then((_) => _waitForBluetoothPoweredOn())
-        .then((_) => _startScan());
+        .then((_) => _waitForBluetoothPoweredOn(log, deviceController, connectionStateController))
+        .then((_) => _startScan(log, deviceController, connectionStateController));
 
     if (_visibleDevicesController.isClosed) {
       _visibleDevicesController = BehaviorSubject<List<BleDevice>>.seeded(<BleDevice>[]);
@@ -83,26 +89,99 @@ class DevicesBloc {
     }
   }
 
-  Future<void> _waitForBluetoothPoweredOn() async {
+  Future<void> _waitForBluetoothPoweredOn(log, BehaviorSubject<BleDevice> deviceController, BehaviorSubject<PeripheralConnectionState> connectionStateController) async {
     Completer completer = Completer();
     StreamSubscription<BluetoothState> subscription;
     subscription = _bleManager.observeBluetoothState(emitCurrentValue: true).listen((bluetoothState) async {
       if (bluetoothState == BluetoothState.POWERED_ON && !completer.isCompleted) {
+        log('Bluetooth Powered on');
         //await subscription.cancel();
         bleDevices.clear();
         completer.complete();
+        _startScan(log, deviceController, connectionStateController);
       } else if (bluetoothState == BluetoothState.POWERED_OFF) {
+        log('Bluetooth Powered off');
         bleDevices.clear();
         completer = Completer();
+        dispose2();
       }
     });
-
-    var tmp = completer.future;
 
     return completer.future;
   }
 
-  void _startScan() {
+  void _startScan(log, BehaviorSubject<BleDevice> deviceController, BehaviorSubject<PeripheralConnectionState> connectionStateController) {
+    log("Ble client created");
+    log("Ble starting scan");
+    _scanSubscription = _bleManager.startPeripheralScan().listen((ScanResult scanResult) async {
+      var bleDevice = BleDevice(scanResult);
+      if (scanResult.advertisementData.localName != null && !bleDevices.contains(bleDevice)) {
+        log('found new device ${scanResult.advertisementData.localName} ${scanResult.peripheral.identifier}');
+        bleDevices.add(bleDevice);
+        _visibleDevicesController.add(bleDevices.sublist(0));
+
+        if (bleDevice.name == "HarpBT190300636") {
+
+          await stopScan();
+
+          deviceController = BehaviorSubject<BleDevice>.seeded(bleDevice);
+
+          deviceController.stream.listen((bleDevice) async {
+            var peripheral = bleDevice.peripheral;
+
+            peripheral.observeConnectionState(emitCurrentValue: true, completeOnDisconnect: true).listen((connectionState) async {
+              log('Observed new connection state: \n$connectionState');
+              connectionStateController.add(connectionState);
+            });
+
+            try {
+              if (await peripheral.isConnected()) {
+                log("Already Connected to ${peripheral.name}");
+              } else {
+                log("Connecting to ${peripheral.name}");
+                await peripheral.connect();
+                log("Connected!");
+
+                await peripheral.discoverAllServicesAndCharacteristics().then((_) => peripheral.services()).then((services) {
+                  log("PRINTING SERVICES for ${peripheral.name}");
+                  var srv = services.firstWhere((service) => service.uuid == SensorTagTemperatureUuids.temperatureService.toLowerCase());
+                  return srv;
+                }).then((service) async {
+                  service.monitorCharacteristic(SensorTagTemperatureUuids.temperatureDataCharacteristic, transactionId: "ignitionOn").listen((event) {
+                    if (event.value.toString().contains("[0]")) {
+                      log("Ignition Off");
+                    } else if (event.value.toString().contains("[1]")) {
+                      log("Ignition On");
+                    } else {
+                      log("Ignition - No Event Recorded");
+                    }
+                  });
+                });
+              }
+
+              //await service.writeCharacteristic(SensorTagTemperatureUuids.temperatureConfigCharacteristic, Uint8List.fromList([valueToSave]), false);
+
+              //Fimber.d("Written \"$valueToSave\" to temperature config");
+            } on BleError catch (e) {
+              log(e.toString());
+
+              if (await deviceController.stream.value.peripheral.isConnected()) {
+                log("DISCONNECTING...");
+                await deviceController.stream.value.peripheral.disconnectOrCancelConnection();
+              }
+              log("Disconnected!");
+            }
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> stopScan() async {
+    await _bleManager.stopPeripheralScan();
+  }
+
+  void _startScan2() {
     Fimber.d("Ble client created");
     _scanSubscription = _bleManager.startPeripheralScan().listen((ScanResult scanResult) {
       var bleDevice = BleDevice(scanResult);
@@ -119,6 +198,6 @@ class DevicesBloc {
     await _bleManager.stopPeripheralScan();
     bleDevices.clear();
     _visibleDevicesController.add(bleDevices.sublist(0));
-    await _checkPermissions().then((_) => _startScan()).catchError((e) => Fimber.d("Couldn't refresh", ex: e));
+    await _checkPermissions().then((_) => _startScan2()).catchError((e) => Fimber.d("Couldn't refresh", ex: e));
   }
 }

@@ -69,94 +69,45 @@ class DeviceListScreenState extends State<DevicesListScreen> {
   Future<void> _onResume() async {
     log("onResume");
 
-    _serviceEnabled = await location.serviceEnabled();
-    if (!_serviceEnabled) {
-      _serviceEnabled = await location.requestService();
-      if (!_serviceEnabled) {
-        return;
-      }
-    }
+    // _serviceEnabled = await location.serviceEnabled();
+    // if (!_serviceEnabled) {
+    //   _serviceEnabled = await location.requestService();
+    //   if (!_serviceEnabled) {
+    //     return;
+    //   }
+    // }
 
-    _permissionGranted = await location.hasPermission();
-    if (_permissionGranted == PermissionStatus.denied) {
-      _permissionGranted = await location.requestPermission();
-      if (_permissionGranted != PermissionStatus.granted) {
-        return;
-      }
-    }
-    log("Getting Current Location Data");
+    // _permissionGranted = await location.hasPermission();
+    // if (_permissionGranted == PermissionStatus.denied) {
+    //   _permissionGranted = await location.requestPermission();
+    //   if (_permissionGranted != PermissionStatus.granted) {
+    //     return;
+    //   }
+    // }
+    // log("Getting Current Location Data");
 
-    _locationData = await location.getLocation();
+    // _locationData = await location.getLocation();
 
     // log("Getting Current Location Data - Done");
 
     // location.onLocationChanged.listen((LocationData currentLocation) {
     //   log("Getting Continuous Location Data: \n$currentLocation.");
-    // });    
+    // });
 
+    _devicesBloc.init(log, _deviceController, _connectionStateController);
 
-    
-    
-    
-    _appStateSubscription = _devicesBloc.pickedDevice.listen((bleDevice) async {
-      log("navigating to selected device");
-      //_onPause();
+    // _appStateSubscription = _devicesBloc.pickedDevice.listen((bleDevice) async {
+    //   log("navigating to selected device");
 
-      _deviceController = BehaviorSubject<BleDevice>.seeded(bleDevice);
+    //   await _devicesBloc.stopScan();
+    //   //_onPause();
 
-      _deviceController.stream.listen((bleDevice) async {
-        var peripheral = bleDevice.peripheral;
-
-        peripheral.observeConnectionState(emitCurrentValue: true, completeOnDisconnect: true).listen((connectionState) async {
-          log('Observed new connection state: \n$connectionState');
-          _connectionStateController.add(connectionState);
-        });
-
-        try {
-          if (await peripheral.isConnected()) {
-            log("Already Connected to ${peripheral.name}");
-          } else {
-            log("Connecting to ${peripheral.name}");
-            await peripheral.connect();
-            log("Connected!");
-
-            await peripheral.discoverAllServicesAndCharacteristics().then((_) => peripheral.services()).then((services) {
-              log("PRINTING SERVICES for ${peripheral.name}");
-              var srv = services.firstWhere((service) => service.uuid == SensorTagTemperatureUuids.temperatureService.toLowerCase());
-              return srv;
-            }).then((service) async {
-              service.monitorCharacteristic(SensorTagTemperatureUuids.temperatureDataCharacteristic, transactionId: "ignitionOn").listen((event) {
-                if (event.value.toString().contains("[0]")) {
-                  log("Ignition Off");
-                } else if (event.value.toString().contains("[1]")) {
-                  log("Ignition On");
-                } else {
-                  log("Ignition - No Event Recorded");
-                }
-              });
-            });
-          }
-
-          //await service.writeCharacteristic(SensorTagTemperatureUuids.temperatureConfigCharacteristic, Uint8List.fromList([valueToSave]), false);
-
-          //Fimber.d("Written \"$valueToSave\" to temperature config");
-        } on BleError catch (e) {
-          (e.toString());
-
-          if (await _deviceController.stream.value.peripheral.isConnected()) {
-            log("DISCONNECTING...");
-            await _deviceController.stream.value.peripheral.disconnectOrCancelConnection();
-          }
-          log("Disconnected!");
-        }
-      });
-
-      //await Navigator.pushNamed(context, "/details");
-      //setState(() {
-      //  _shouldRunOnResume = true;
-      // });
-      //  Fimber.d("back from details");
-    });
+    //   //await Navigator.pushNamed(context, "/details");
+    //   //setState(() {
+    //   //  _shouldRunOnResume = true;
+    //   // });
+    //   //  Fimber.d("back from details");
+    // });
   }
 
   @override
